@@ -1,14 +1,103 @@
-# webhook.py - Apenas funcionalidades do webhook (sem execução)
-
 import json
+import inspect
+import hashlib
 from datetime import datetime
-from typing import List, Dict
-from fastapi import FastAPI, Request
-import GET
+from typing import List, Dict, Any
 
-# Lista para armazenar apenas os itens habilitados do último webhook
-itens_habilitados_ultimo = []
-last_webhook_id = None  # Variável global para armazenar o ID do último webhook processado
+from fastapi import FastAPI, Request
+from requests import get, exceptions
+
+import GET
+from POST import ChecklistCreator
+
+# ==================================
+#    CONFIGURAÇÃO E VARIÁVEIS GLOBAIS
+# ==================================
+
+last_webhook_id = None
+TEMPLATE_ID_CLAUSE = "67f6ad27bfce31f9c1926b57"
+
+
+# ==================================
+#         FUNÇÕES AUXILIARES
+# ==================================
+
+def GerarItens(exec_id: str) -> List[str]:
+    from requests import get, exceptions
+    try:
+        cc = ChecklistCreator()
+        url = f"{cc.base_url.rstrip('/')}/checklists"
+        resp = get(url, headers=cc.headers, params={
+            "template_id": TEMPLATE_ID_CLAUSE,
+            "execution_company_id": exec_id
+        }, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        claus = []
+        for chk in data:
+            for sec in chk.get("sections", []):
+                for q in sec.get("questions", []):
+                    if "item/" in q.get("title", "").lower():
+                        if q.get("value"):
+                            claus.append(str(q["value"]).strip())
+                        for sub in q.get("sub_questions", []):
+                            if sub.get("value"):
+                                claus.append(str(sub["value"]).strip())
+        print(f"[FetchClauses] Capturadas {len(claus)} cláusulas: {claus}")
+        return claus
+    except exceptions.RequestException as e:
+        print(f"[FetchClauses] ❌ {e}")
+        return []
+
+def _extract_exec_id(payload: dict) -> str | None:
+    """Extrai o ID da empresa de execução do payload."""
+    if payload and isinstance(payload.get("execution_company_id"), dict):
+        return payload.get("execution_company_id", {}).get("$oid")
+    return None
+
+def _buscar_clausulas_padrao(exec_id: str) -> List[str]:
+    """Busca as cláusulas padrão de um checklist de referência."""
+    try:
+        cc = ChecklistCreator()
+        url = f"{cc.base_url.rstrip('/')}/checklists"
+        resp = get(url, headers=cc.headers, params={
+            "template_id": TEMPLATE_ID_CLAUSE,
+            "execution_company_id": exec_id
+        }, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        claus = [
+            str(sub.get("value")).strip()
+            for chk in data
+            for sec in chk.get("sections", [])
+            for q in sec.get("questions", [])
+            if "item/" in q.get("title", "").lower()
+            for sub in q.get("sub_questions", [])
+            if sub.get("value")
+        ]
+        print(f"[FetchClauses] Capturadas {len(claus)} cláusulas padrão: {claus}")
+        return claus
+    except exceptions.RequestException as e:
+        print(f"[FetchClauses] ❌ {e}")
+        return []
+
+def processar_item_checklist(checklist, tipo):
+    """
+    Processa um item do checklist (FT, FA, FO, GC, VC)
+    """
+    item_info = {
+        "item": None,
+        "habilitado": False,
+        "tipo": tipo
+    }
+
+    for question in checklist.get("sub_checklist_questions", []):
+        if question.get("question") == f"Item ({tipo})":
+            item_info["item"] = question.get("value")
+        elif question.get("question") == f"Enviar para execução ({tipo})":
+            item_info["habilitado"] = question.get("value") == "true"
+
+    return item_info if item_info["item"] else None
 
 
 def extrair_informacoes_planejamento(data):
@@ -24,7 +113,8 @@ def extrair_informacoes_planejamento(data):
         "itens_fa": [],
         "itens_fo": [],
         "itens_gc": [],
-        "itens_vc": []
+        "itens_vc": [],
+        "total_itens": 0
     }
 
     # Extrair informações das questões do template
@@ -37,6 +127,8 @@ def extrair_informacoes_planejamento(data):
             informacoes["contrato_concessao"] = question.get("value")
         elif question.get("question") == "Concessionária":
             informacoes["concessionaria"] = question.get("value")
+        elif question.get("question") == "Gerar checklist":
+            informacoes["gerar_checklist_manual"] = question.get("value") == "true"
         elif question.get("question") == "Adicionar itens - Fiscalização Técnica":
             # Processar itens FT
             for checklist in question.get("sub_checklists", []):
@@ -68,332 +160,187 @@ def extrair_informacoes_planejamento(data):
                 if item_info:
                     informacoes["itens_vc"].append(item_info)
 
+
     return informacoes
 
-
-def processar_item_checklist(checklist, tipo):
-    """
-    Processa um item do checklist (FT, FA, FO, GC, VC)
-    """
-    item_info = {
-        "item": None,
-        "habilitado": False,
-        "tipo": tipo
-    }
-
-    for question in checklist.get("sub_checklist_questions", []):
-        if question.get("question") == f"Item ({tipo})":
-            item_info["item"] = question.get("value")
-        elif question.get("question") == f"Enviar para execução ({tipo})":
-            item_info["habilitado"] = question.get("value") == "true"
-
-    return item_info if item_info["item"] else None
-
-
-def formatar_saida(informacoes):
-    """
-    Formata as informações para saída legível
-    """
-    output = []
-    output.append("=== INFORMAÇÕES DO PLANEJAMENTO ===")
-    output.append(f"Identificador: {informacoes['identificador']}")
-    output.append(f"Data Prevista: {informacoes['data_prevista']}")
-    output.append(f"Contrato de Concessão: {informacoes['contrato_concessao']}")
-    output.append(f"Concessionária: {informacoes['concessionaria']}")
-
-    # FT
-    output.append("\n=== ITENS DE FISCALIZAÇÃO TÉCNICA (FT) ===")
-    if informacoes['itens_ft']:
-        for item in informacoes['itens_ft']:
-            status = "✅ HABILITADO" if item['habilitado'] else "❌ DESABILITADO"
-            output.append(f"  - Item {item['item']}: {status}")
-    else:
-        output.append("  Nenhum item FT selecionado")
-
-    # FA
-    output.append("\n=== ITENS DE FISCALIZAÇÃO ADMINISTRATIVA (FA) ===")
-    if informacoes['itens_fa']:
-        for item in informacoes['itens_fa']:
-            status = "✅ HABILITADO" if item['habilitado'] else "❌ DESABILITADO"
-            output.append(f"  - Item {item['item']}: {status}")
-    else:
-        output.append("  Nenhum item FA selecionado")
-
-    # FO
-    output.append("\n=== ITENS DE FISCALIZAÇÃO DE OBRAS (FO) ===")
-    if informacoes['itens_fo']:
-        for item in informacoes['itens_fo']:
-            status = "✅ HABILITADO" if item['habilitado'] else "❌ DESABILITADO"
-            output.append(f"  - Item {item['item']}: {status}")
-    else:
-        output.append("  Nenhum item FO selecionado")
-
-    # GC
-    output.append("\n=== ITENS DE GESTÃO DO CONTRATO (GC) ===")
-    if informacoes['itens_gc']:
-        for item in informacoes['itens_gc']:
-            status = "✅ HABILITADO" if item['habilitado'] else "❌ DESABILITADO"
-            output.append(f"  - Item {item['item']}: {status}")
-    else:
-        output.append("  Nenhum item GC selecionado")
-
-    # VC
-    output.append("\n=== ITENS DE VERIFICADOR DE CONFORMIDADE (VC) ===")
-    if informacoes['itens_vc']:
-        for item in informacoes['itens_vc']:
-            status = "✅ HABILITADO" if item['habilitado'] else "❌ DESABILITADO"
-            output.append(f"  - Item {item['item']}: {status}")
-    else:
-        output.append("  Nenhum item VC selecionado")
-
-    return "\n".join(output)
-
-
-def atualizar_cache_formularios():
-    """
-    Sempre atualiza o cache de formulários a cada ativação do webhook
-    """
-    print("🔄 Atualizando cache de formulários...")
-    sucesso = GET.carregar_formularios(forcar_nova_requisicao=True)
-
-    if sucesso:
-        print("✅ Cache de formulários atualizado com sucesso!")
-        return True
-    else:
-        print("❌ Falha ao atualizar cache de formulários.")
-        return False
-
-
-def processar_itens_habilitados(informacoes):
-    """
-    Processa todos os itens habilitados de forma otimizada
-    """
-    # O cache já foi garantido no endpoint do webhook
-
-    # Coletar todos os itens habilitados por tipo
-    tipos_itens = {
-        'FT': [item['item'] for item in informacoes['itens_ft'] if item['habilitado']],
-        'FA': [item['item'] for item in informacoes['itens_fa'] if item['habilitado']],
-        'FO': [item['item'] for item in informacoes['itens_fo'] if item['habilitado']],
-        'GC': [item['item'] for item in informacoes['itens_gc'] if item['habilitado']],
-        'VC': [item['item'] for item in informacoes['itens_vc'] if item['habilitado']]
-    }
-
-    print("\n" + "=" * 60)
-    print("🔍 PROCESSANDO ITENS HABILITADOS COM CACHE OTIMIZADO")
-    print("=" * 60)
-
-    # Processar cada tipo de item
-    resultados_processamento = {}
-
-    for tipo, itens_habilitados in tipos_itens.items():
-        if not itens_habilitados:
-            print(f"\n🔶 {tipo}: Nenhum item habilitado.")
-            resultados_processamento[tipo] = []
-            continue
-
-        print(f"\n🔍 {tipo}: Processando {len(itens_habilitados)} itens habilitados: {itens_habilitados}")
-        print("-" * 40)
-
-        try:
-            # Usar a busca no cache (muito mais rápida)
-            formularios_encontrados = GET.buscar_clausulas(itens_habilitados, mostrar_detalhes=True)
-
-            print(f"✅ {tipo}: {len(formularios_encontrados)} formulários encontrados para os itens habilitados.")
-
-            resultados_processamento[tipo] = formularios_encontrados
-
-        except Exception as e:
-            print(f"❌ Erro ao processar itens {tipo}: {e}")
-            resultados_processamento[tipo] = []
-
-    return resultados_processamento
-
-
-def atualizar_itens_habilitados_global(informacoes):
-    """
-    Atualiza a lista global de itens habilitados
-    """
-    global itens_habilitados_ultimo
-
-    # Limpar lista anterior e adicionar apenas itens habilitados
-    itens_habilitados_ultimo = []
-
-    # Adicionar todos os itens habilitados à lista global
+def get_total_itens(info: dict):
+    """Calcula o total de itens habilitados."""
+    itens_habilitados = []
+    itens_habilitados_dict = {"total": [], "FA": [], "FT": [], "FO": [], "GC": [], "VC": []}
+    total = 0
     for tipo in ['itens_ft', 'itens_fa', 'itens_fo', 'itens_gc', 'itens_vc']:
-        for item in informacoes[tipo]:
+        for item in info[tipo]:
             if item['habilitado']:
-                itens_habilitados_ultimo.append({
+                itens_habilitados.append({
                     "item": item['item'],
                     "tipo": item['tipo']
                 })
+                itens_habilitados_dict[item['tipo']].append(item['item'])
+                itens_habilitados_dict["total"].append(item['item'])
+                print(f"Item habilitado: {item['item']} ({item['tipo']})")
+                total += 1
+    print(f"{itens_habilitados_dict}")
+    return itens_habilitados_dict
 
 
-def salvar_dados_webhook(body, informacoes):
-    """
-    Salva dados do webhook para debug
-    """
-    with open("ultimo_webhook.json", "w", encoding="utf-8") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "original": body,
-            "formatado": informacoes,
-            "itens_habilitados": itens_habilitados_ultimo
-        }, f, ensure_ascii=False, indent=2)
+
+# ==================================
+#     LÓGICA DOS ENDPOINTS
+# ==================================
+
+async def handle_webhook(payload: dict):
+    """Lógica para o endpoint /webhook (geração manual)."""
+    info = extrair_informacoes_planejamento(payload)
+    total_itens = len(get_total_itens(info)["total"])
+    print(f"Total de itens habilitados: {total_itens}")
+    print("\n--- PROCESSANDO ENDPOINT /webhook (MANUAL) ---")
+    print(f"Itens manuais selecionados: {total_itens}")
+    print(f"Flag 'Gerar checklist' encontrada: {info.get('gerar_checklist_manual')}")
+    form_id = payload.get('_id', {}).get('$oid')
+    print(f"✅ ID do Formulário do webhook_itens capturado: {form_id}")
+    if not info.get('gerar_checklist_manual') and total_itens > 0:
+        print(f"ID do Formulário: {form_id}")
+        print("Itens selecionados, mas flag 'Gerar checklist' não marcada. Fazendo.... nada.")
+    elif info.get('gerar_checklist_manual') and total_itens > 0:
+        print("✅ Condições atendidas para /webhook. Iniciando criação do checklist.")
+        itens_para_api = {}
+        buscador = GET.FormulariosBuscador()
+        buscador.carregar_e_salvar_formularios()
+
+        for tipo_key in ['itens_ft', 'itens_fa', 'itens_fo', 'itens_gc', 'itens_vc']:
+            tipo_abbr = tipo_key.replace('itens_', '').upper()
+            clausulas = [item['item'] for item in info[tipo_key]]
+            if clausulas:
+                formularios = GET.buscar_clausulas(clausulas, mostrar_detalhes=False)
+                itens_para_api[tipo_abbr] = []
+                for form in formularios:
+                    detalhes = buscador.extrair_informacoes_formulario(form)
+                    item_d = {
+                            "item": detalhes.get("item", ""),
+                            "codigo": detalhes.get("codigo", ""),
+                            "instrumento": detalhes.get("instrumento", ""),
+                            "dimensao": detalhes.get("dimensao", ""),
+                            "verificacao": detalhes.get("verificacao", ""),
+                            "av": detalhes.get("av", ""),
+                            "peso": detalhes.get("peso", ""),
+                            "indicador": detalhes.get("indicador", "")
+                            }
+                    itens_para_api[tipo_abbr].append(item_d)
+        
+        identificacao = {k: info.get(k) for k in ["data_prevista", "contrato_concessao", "identificador", "concessionaria"]}
+        
+        creator = ChecklistCreator()
+        user_id = payload.get("user_id", {}).get("$oid")
+        print(f"Itens para API: \n{itens_para_api}")
+        checklist_id = creator.criar_checklist_completo(
+            identificacao=identificacao,
+            itens_por_tipo=itens_para_api,
+            assignee_id=user_id,
+            creator_id=user_id
+        )
+        if checklist_id:
+            return {"status": "sucesso", "endpoint": "/webhook", "checklist_id": checklist_id}
+        else:
+            return {"status": "falha", "endpoint": "/webhook", "motivo": "Erro na criação do checklist via API."}
+    elif total_itens == 0:
+        #usar ChecklistCreator.adicionar_subchecklists para gerar subchecklists, usando o ID do formulário
+        print("✅ Condições atendidas para /webhook, mas nenhum item selecionado. Iniciando geração de subchecklists.")
+        comp_id = _extract_exec_id(payload)
+        clausulas = GET._buscar_clausulas(comp_id)
+        cc = ChecklistCreator()
+        if not clausulas:
+            print("❌ Nenhuma cláusula encontrada para gerar subchecklists.")
+            return {"status": "falha", "endpoint": "/webhook", "motivo": "Nenhuma cláusula encontrada."}
+        else:
+            cc.adicionar_subchecklists_itens(form_id, clausulas)
+
+        #cc.adicionar_subchecklists(form_id, "FA", )
+    else:
+        print("❌ Condições para /webhook não atendidas. Encerrando.")
+        return {"status": "ignorado", "endpoint": "/webhook", "motivo": "Condições não atendidas."}
 
 
-def processar_webhook_completo(body):
-    """
-    Função principal que processa todo o webhook
+async def handle_webhook_itens(payload: dict):
+    """Lógica para o endpoint /webhook_itens (geração automática)."""
+    # NOVO: Armazena o ID do formulário em uma variável
+    form_id = payload.get('_id', {}).get('$oid')
+    print(f"✅ ID do Formulário do webhook_itens capturado: {form_id}")
 
-    Args:
-        body: Dados JSON recebidos pelo webhook
+    info = extrair_informacoes_planejamento(payload)
+    total_itens = get_total_itens(info)
+    exec_id = _extract_exec_id(payload)
 
-    Returns:
-        dict: Resposta formatada do processamento
-    """
-    global last_webhook_id
+    print("\n--- PROCESSANDO ENDPOINT /webhook_itens (AUTOMÁTICO) ---")
+    print(f"Itens manuais selecionados: {total_itens}")
+    print(f"Flag 'Gerar Itens' encontrada: {info.get('gerar_itens_auto')}")
 
-    # Generate a unique ID from the webhook content
-    import hashlib
-    webhook_content = json.dumps(body, sort_keys=True)
-    current_id = hashlib.md5(webhook_content.encode()).hexdigest()
-
-    # Check if this is a duplicate
-    if current_id == last_webhook_id:
-        print("🔄 Duplicate webhook detected - ignoring")
-        return {"status": "ignored", "reason": "duplicate_request"}
-
-    # Save this ID
-    last_webhook_id = current_id
-    print("🚀 Webhook recebido!")
-
-    # SEMPRE ATUALIZA O CACHE A CADA ATIVAÇÃO
-    print("📡 Iniciando atualização do cache de formulários...")
-    if not atualizar_cache_formularios():
+    if info.get('gerar_itens_auto') and total_itens == 0:
+        print("✅ Condições atendidas para /webhook_itens. Iniciando busca de cláusulas padrão.")
+        
+        clausulas_padrao = _buscar_clausulas_padrao(exec_id)
+        if not clausulas_padrao:
+            return {"status": "falha", "endpoint": "/webhook_itens", "motivo": "Flag de geração automática marcada, mas nenhuma cláusula padrão foi encontrada."}
+        
+        print("*"*50)
+        print(">>> AÇÃO: CHAMAR O SEGUNDO POST (A SER CRIADO) <<<")
+        print(f"Cláusulas para o novo POST: {clausulas_padrao}")
+        print(f"ID do Formulário original a ser usado: {form_id}") # NOVO: Mostra o ID
+        print("*"*50)
+        
+        # ALTERADO: Inclui o ID do formulário na resposta
         return {
-            "status": "erro",
-            "message": "Falha ao atualizar cache de formulários",
-            "timestamp": datetime.now().isoformat()
+            "status": "sucesso_placeholder",
+            "endpoint": "/webhook_itens",
+            "form_id_processado": form_id, 
+            "clausulas_encontradas": len(clausulas_padrao)
         }
 
-    # Extrair informações formatadas
-    informacoes = extrair_informacoes_planejamento(body)
-
-    # Atualizar lista global de itens habilitados
-    atualizar_itens_habilitados_global(informacoes)
-
-    # Exibir informações formatadas
-    print("\n" + formatar_saida(informacoes))
-
-    # Mostrar lista de itens habilitados
-    print("\n=== LISTA DE ITENS HABILITADOS ===")
-    if itens_habilitados_ultimo:
-        for item in itens_habilitados_ultimo:
-            print(f"  - {item['tipo']}: {item['item']}")
     else:
-        print("  Nenhum item habilitado")
-
-    # Salvar dados do webhook para debug
-    salvar_dados_webhook(body, informacoes)
-
-    # Processar todos os itens habilitados de forma otimizada
-    resultados = processar_itens_habilitados(informacoes)
-
-    # MODIFICAÇÃO: Adicionar os formulários encontrados ao response
-    formularios_por_tipo = {}
-    for tipo, formularios in resultados.items():
-        if formularios:
-            formularios_por_tipo[tipo] = formularios
-
-    # Retornar resposta com formulários
-    response = {
-        "status": "sucesso",
-        "dados_formatados": informacoes,
-        "itens_habilitados": itens_habilitados_ultimo,
-        "total_itens_habilitados": len(itens_habilitados_ultimo),
-        "resultados_processamento": {tipo: len(resultado) for tipo, resultado in resultados.items()},
-        "formularios_por_tipo": formularios_por_tipo  # NOVO: Adicionar formulários
-    }
-
-    return response
+        print("❌ Condições para /webhook_itens não atendidas. Encerrando.")
+        return {"status": "ignorado", "endpoint": "/webhook_itens", "motivo": "Condições não atendidas."}
 
 
-def obter_itens_habilitados():
-    """
-    Retorna os itens habilitados do último webhook
-    """
-    return {
-        "total": len(itens_habilitados_ultimo),
-        "itens": itens_habilitados_ultimo
-    }
-
+# ==================================
+#         APLICAÇÃO FASTAPI
+# ==================================
 
 def criar_app_fastapi():
-    """
-    Cria e configura a aplicação FastAPI com todos os endpoints
-    """
+    """Cria e configura a aplicação FastAPI com todos os endpoints."""
     app = FastAPI()
 
-    @app.post("/webhook_itens")
-    async def webhook_itens_endpoint(request: Request):
-        body = await request.json()
-        return processar_webhook_completo(body)
+    async def processar_payload(request: Request, handler):
+        """Função genérica para pré-processar webhooks."""
+        global last_webhook_id
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return {"status": "erro", "motivo": "Payload inválido, não é um JSON."}
+        
+        #print("\n" + "="*20 + " INÍCIO DO WEBHOOK RAW " + "="*20)
+        #print(f">>> WEBHOOK RECEBIDO EM: {request.url.path}")
+        #print(json.dumps(body, indent=2, ensure_ascii=False))
+        #print("="*22 + " FIM DO WEBHOOK RAW " + "="*23 + "\n")
+
+        webhook_content = json.dumps(body, sort_keys=True)
+        current_id = hashlib.md5(webhook_content.encode()).hexdigest()
+        if current_id == last_webhook_id:
+            print("🔄 Webhook duplicado detectado - ignorando")
+            return {"status": "ignorado", "reason": "duplicate_request"}
+        
+        last_webhook_id = current_id
+        print(f"🚀 Processando novo webhook (ID: {current_id[:8]}...).")
+        
+        if inspect.iscoroutinefunction(handler):
+            return await handler(body)
+        else:
+            return handler(body)
 
     @app.post("/webhook")
     async def webhook_endpoint(request: Request):
-        body = await request.json()
-        return processar_webhook_completo(body)
+        return await processar_payload(request, handle_webhook)
 
-    @app.get("/itens-habilitados")
-    async def listar_itens_habilitados():
-        """
-        Endpoint para consultar os itens habilitados do último webhook
-        """
-        return obter_itens_habilitados()
-
-    @app.get("/recarregar-cache")
-    async def recarregar_cache():
-        """
-        Endpoint para forçar recarregamento do cache de formulários
-        """
-        print("🔄 Forçando recarregamento do cache...")
-
-        sucesso = GET.carregar_formularios(forcar_nova_requisicao=True)
-
-        if sucesso:
-            return {"status": "sucesso", "message": "Cache recarregado com sucesso"}
-        else:
-            return {"status": "erro", "message": "Falha ao recarregar cache"}
-
-    @app.get("/status-cache")
-    async def status_cache():
-        """
-        Endpoint para verificar status do cache
-        """
-        import os
-
-        cache_existe = os.path.exists('cache_formularios.json')
-
-        status = {
-            "arquivo_cache_existe": cache_existe,
-            "cache_atualizado_a_cada_webhook": True
-        }
-
-        if cache_existe:
-            try:
-                timestamp_arquivo = datetime.fromtimestamp(os.path.getmtime('cache_formularios.json'))
-                with open('cache_formularios.json', 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-
-                status.update({
-                    "timestamp_ultimo_cache": timestamp_arquivo.isoformat(),
-                    "total_formularios": cache_data.get('total_formularios', 0),
-                    "idade_cache_horas": (datetime.now() - timestamp_arquivo).total_seconds() / 3600
-                })
-            except Exception as e:
-                status["erro_cache"] = str(e)
-
-        return status
+    @app.post("/webhook_itens")
+    async def webhook_itens_endpoint(request: Request):
+        return await processar_payload(request, handle_webhook_itens)
 
     return app

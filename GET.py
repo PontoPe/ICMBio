@@ -3,6 +3,8 @@ import json
 import sys
 import os
 from datetime import datetime, timedelta
+from typing import List
+import POST
 
 
 class FormulariosBuscador:
@@ -19,7 +21,7 @@ class FormulariosBuscador:
         }
         self.arquivo_cache = arquivo_cache
 
-    def carregar_e_salvar_formularios(self, forcar_nova_requisicao=False):
+    def carregar_e_salvar_formularios(self, forcar_nova_requisicao=True):
         """
         Métdo 1: Faz a requisição GET e salva todos os dados em arquivo temporário
 
@@ -29,10 +31,8 @@ class FormulariosBuscador:
         Returns:
             bool: True se bem-sucedido, False caso contrário
         """
-        # Verificar se o cache existe e é recente (menos de 1 hora)
         if not forcar_nova_requisicao and os.path.exists(self.arquivo_cache):
             try:
-                # Verificar idade do arquivo
                 tempo_arquivo = datetime.fromtimestamp(os.path.getmtime(self.arquivo_cache))
                 tempo_atual = datetime.now()
 
@@ -62,7 +62,6 @@ class FormulariosBuscador:
             dados_json = response.json()
             print(f"📊 Tipo de dados recebidos: {type(dados_json)}")
 
-            # Processar diferentes formatos de resposta
             dados_formularios = None
 
             if isinstance(dados_json, list):
@@ -70,7 +69,6 @@ class FormulariosBuscador:
                 print(f"✅ Lista direta recebida! {len(dados_formularios)} formulários.")
             elif isinstance(dados_json, dict):
                 print(f"📝 Objeto recebido. Chaves disponíveis: {list(dados_json.keys())}")
-                # Tentar encontrar a lista de formulários
                 if 'data' in dados_json:
                     dados_formularios = dados_json['data']
                 elif 'results' in dados_json:
@@ -85,14 +83,12 @@ class FormulariosBuscador:
                 print(f"❌ Formato de dados inesperado: {type(dados_json)}")
                 return False
 
-            # Criar estrutura de cache com metadados
             cache_data = {
                 "timestamp": datetime.now().isoformat(),
                 "total_formularios": len(dados_formularios),
                 "dados": dados_formularios
             }
 
-            # Salvar no arquivo de cache
             with open(self.arquivo_cache, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2, ensure_ascii=False)
 
@@ -153,20 +149,29 @@ class FormulariosBuscador:
             clausulas_encontradas = set()
 
             print(f"🔍 Buscando por cláusulas: {clausulas_desejadas}")
+            for valor in clausulas_desejadas:
+                valor = str(valor).strip()
+                print(f"Valor: {valor}")
 
-            for formulario in dados_formularios:
-                # Procurar pela seção 'Identificação' e questão 'item/Cláusula'
+            formularios_filtrados = []
+            clausulas_encontradas = set()
+
+            # antes de tudo, garanta que sua lista de buscas seja de strings limpinhas:
+            clausulas_desejadas = [str(c).strip() for c in clausulas_desejadas]
+
+            for formulario in cache_data.get('dados', []):
                 for secao in formulario.get('sections', []):
                     if secao.get('title') == 'Identificação':
                         for questao in secao.get('questions', []):
                             if questao.get('title') == 'item/Cláusula':
-                                # Verificar se o valor da cláusula está na lista desejada
-                                for sub_questao in questao.get('sub_questions', []):
-                                    clausula_valor = sub_questao.get('value')
-                                    if clausula_valor in clausulas_desejadas:
+                                for sub in questao.get('sub_questions', []):
+                                    # converte o value (float, int ou str) para string
+                                    valor = str(sub.get('value', '')).strip()
+                                    if valor in clausulas_desejadas:
                                         formularios_filtrados.append(formulario)
-                                        clausulas_encontradas.add(clausula_valor)
+                                        clausulas_encontradas.add(valor)
                                         break
+                                break
                         break
 
             # Mostrar resultado da busca
@@ -191,12 +196,6 @@ class FormulariosBuscador:
     def extrair_informacoes_formulario(self, formulario):
         """
         Extrai as principais informações de um formulário
-
-        Args:
-            formulario (dict): Dicionário com dados do formulário
-
-        Returns:
-            dict: Dicionário com informações estruturadas
         """
         info = {
             'id': formulario.get('id'),
@@ -205,7 +204,6 @@ class FormulariosBuscador:
             'assignee': f"{formulario.get('assignee', {}).get('first_name', '')} {formulario.get('assignee', {}).get('last_name', '')}".strip()
         }
 
-        # Extrair informações da seção Identificação
         for secao in formulario.get('sections', []):
             if secao.get('title') == 'Identificação':
                 for questao in secao.get('questions', []):
@@ -225,27 +223,39 @@ class FormulariosBuscador:
         else:
             print(f"ℹ️ Cache '{self.arquivo_cache}' não existe.")
 
+def _buscar_clausulas(exec_id: str) -> List[str]:
+    from requests import get, exceptions
+    try:
+        cc = POST.ChecklistCreator()
+        url = f"{cc.base_url.rstrip('/')}/checklists"
+        resp = get(url, headers=cc.headers, params={
+            "template_id": "67f6ad27bfce31f9c1926b57",
+            "execution_company_id": exec_id
+        }, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        claus = []
+        for chk in data:
+            for sec in chk.get("sections", []):
+                for q in sec.get("questions", []):
+                    if "item/" in q.get("title", "").lower():
+                        if q.get("value"):
+                            claus.append(str(q["value"]).strip())
+                        for sub in q.get("sub_questions", []):
+                            if sub.get("value"):
+                                claus.append(str(sub["value"]).strip())
+        print(f"[FetchClauses] Capturadas {len(claus)} cláusulas: {claus}")
+        return claus
+    except exceptions.RequestException as e:
+        print(f"[FetchClauses] ❌ {e}")
+        return []
 
-# Funções de conveniência para uso direto
 def carregar_formularios(forcar_nova_requisicao=False):
-    """
-    Função de conveniência para carregar formulários
-    """
     buscador = FormulariosBuscador()
     return buscador.carregar_e_salvar_formularios(forcar_nova_requisicao)
 
 
 def buscar_clausulas(clausulas_desejadas, mostrar_detalhes=True):
-    """
-    Função de conveniência para buscar cláusulas no cache
-
-    Args:
-        clausulas_desejadas (list): Lista de cláusulas para buscar
-        mostrar_detalhes (bool): Se deve mostrar detalhes dos formulários encontrados
-
-    Returns:
-        list: Lista de formulários encontrados
-    """
     buscador = FormulariosBuscador()
     formularios = buscador.buscar_por_clausulas_no_cache(clausulas_desejadas)
 
@@ -269,9 +279,6 @@ def buscar_clausulas(clausulas_desejadas, mostrar_detalhes=True):
 
 
 def procurarCadastroPorItem(item_desejado=None):
-    """
-    Função principal - mantida para compatibilidade
-    """
     if item_desejado is None or item_desejado == []:
         print("❌ Cláusulas desejadas não foram fornecidas.")
         return []
@@ -284,7 +291,5 @@ def procurarCadastroPorItem(item_desejado=None):
 
 
 if __name__ == "__main__":
-    # Este arquivo contém apenas funções para serem importadas
-    # A execução deve ser feita através do main.py
     print("⚠️  Este arquivo contém apenas funções.")
     print("💡 Execute o main.py para usar o sistema completo.")
