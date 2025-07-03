@@ -21,7 +21,7 @@ class FormulariosBuscador:
 
     def carregar_e_salvar_formularios(self, forcar_nova_requisicao=False):
         """
-        Método 1: Faz a requisição GET e salva todos os dados em arquivo temporário
+        Métdo 1: Faz a requisição GET e salva todos os dados em arquivo temporário
 
         Args:
             forcar_nova_requisicao (bool): Se True, força uma nova requisição mesmo se o cache existe
