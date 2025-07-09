@@ -1,18 +1,17 @@
 import requests
 import json
-import sys
 import os
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Dict
 import POST
-
+import unicodedata
 
 class FormulariosBuscador:
-    def __init__(self, arquivo_cache='cache_formularios.json'):
+    def __init__(self, execution_company_id: str, arquivo_cache='cache_formularios.json'):
         self.url = "https://app.way-v.com/api/integration/checklists"
         self.token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjb21wYW55X2lkIjoiNjYzZDMxYTFlOWRhYzNmNWY0ZDNjZjJlIiwiY3VycmVudF90aW1lIjoxNzQ4OTUzODcyNjgzLCJleHAiOjIwNjQ0ODY2NzJ9.j6zOrJMDKNcCcMMcO99SudriP7KqEDLMJDE2FBlQ6ok'
         self.params = {
-            "execution_company_id": '663d31a1e9dac3f5f4d3cf2e',
+            "execution_company_id": execution_company_id,
             "template_id": '67f6ae4d6ba4f07ba32a1ea8'
         }
         self.headers = {
@@ -22,214 +21,93 @@ class FormulariosBuscador:
         self.arquivo_cache = arquivo_cache
 
     def carregar_e_salvar_formularios(self, forcar_nova_requisicao=True):
-        """
-        Métdo 1: Faz a requisição GET e salva todos os dados em arquivo temporário
-
-        Args:
-            forcar_nova_requisicao (bool): Se True, força uma nova requisição mesmo se o cache existe
-
-        Returns:
-            bool: True se bem-sucedido, False caso contrário
-        """
         if not forcar_nova_requisicao and os.path.exists(self.arquivo_cache):
             try:
                 tempo_arquivo = datetime.fromtimestamp(os.path.getmtime(self.arquivo_cache))
-                tempo_atual = datetime.now()
-
-                if tempo_atual - tempo_arquivo < timedelta(hours=1):
-                    print(
-                        f"📋 Cache válido encontrado em '{self.arquivo_cache}' (criado há {tempo_atual - tempo_arquivo})")
+                if datetime.now() - tempo_arquivo < timedelta(hours=1):
+                    print(f"📋 Cache válido encontrado em '{self.arquivo_cache}'.")
                     return True
                 else:
-                    print(f"⏰ Cache expirado (criado há {tempo_atual - tempo_arquivo}). Fazendo nova requisição...")
+                    print(f"⏰ Cache expirado. Fazendo nova requisição...")
             except Exception as e:
                 print(f"⚠️ Erro ao verificar cache: {e}. Fazendo nova requisição...")
-
         try:
-            print("🌐 Fazendo requisição GET para buscar todos os formulários...")
-            print(f"🔗 URL: {self.url}")
-            print(f"📋 Params: {self.params}")
-
-            response = requests.get(self.url, headers=self.headers, params=self.params)
-
-            print(f"📡 Status Code: {response.status_code}")
-
-            if response.status_code != 200:
-                print(f"❌ Erro {response.status_code}")
-                print(f"📄 Response text: {response.text}")
+            print("🌐 Buscando formulários de cadastro de itens...")
+            response = requests.get(self.url, headers=self.headers, params=self.params, timeout=30)
+            response.raise_for_status()
+            dados_formularios = response.json()
+            if not isinstance(dados_formularios, list):
                 return False
-
-            dados_json = response.json()
-            print(f"📊 Tipo de dados recebidos: {type(dados_json)}")
-
-            dados_formularios = None
-
-            if isinstance(dados_json, list):
-                dados_formularios = dados_json
-                print(f"✅ Lista direta recebida! {len(dados_formularios)} formulários.")
-            elif isinstance(dados_json, dict):
-                print(f"📝 Objeto recebido. Chaves disponíveis: {list(dados_json.keys())}")
-                if 'data' in dados_json:
-                    dados_formularios = dados_json['data']
-                elif 'results' in dados_json:
-                    dados_formularios = dados_json['results']
-                elif 'items' in dados_json:
-                    dados_formularios = dados_json['items']
-                else:
-                    print("❌ Não foi possível encontrar a lista de formulários no JSON retornado")
-                    return False
-                print(f"✅ Formulários extraídos! {len(dados_formularios)} formulários encontrados.")
-            else:
-                print(f"❌ Formato de dados inesperado: {type(dados_json)}")
-                return False
-
-            cache_data = {
-                "timestamp": datetime.now().isoformat(),
-                "total_formularios": len(dados_formularios),
-                "dados": dados_formularios
-            }
-
             with open(self.arquivo_cache, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=2, ensure_ascii=False)
-
-            print(f"💾 Dados salvos no cache '{self.arquivo_cache}'")
-            print(f"✅ Total de formulários salvos: {len(dados_formularios)}")
-
+                json.dump({"timestamp": datetime.now().isoformat(), "dados": dados_formularios}, f, indent=2, ensure_ascii=False)
+            print(f"💾 Dados de cadastro salvos no cache. Total: {len(dados_formularios)}")
             return True
-
         except requests.exceptions.RequestException as e:
             print(f"❌ Erro na requisição: {e}")
             return False
-        except json.JSONDecodeError as e:
-            print(f"❌ Erro ao decodificar JSON: {e}")
-            if 'response' in locals():
-                print(f"📄 Response text: {response.text[:500]}...")
-            return False
         except Exception as e:
-            print(f"❌ Erro inesperado: {e}")
+            print(f"❌ Erro inesperado ao carregar/salvar formulários: {e}")
             return False
 
-    def buscar_por_clausulas_no_cache(self, clausulas_desejadas):
-        """
-        Método 2: Busca formulários por cláusulas usando o arquivo de cache
-
-        Args:
-            clausulas_desejadas (list): Lista de strings com os números das cláusulas
-
-        Returns:
-            list: Lista de formulários filtrados
-        """
-        # Verificar se o arquivo de cache existe
+    def buscar_por_clausulas_no_cache(self, clausulas_desejadas: List[str]) -> List[Dict]:
         if not os.path.exists(self.arquivo_cache):
             print(f"❌ Arquivo de cache '{self.arquivo_cache}' não encontrado.")
-            print("💡 Execute primeiro carregar_e_salvar_formularios() para criar o cache.")
             return []
-
         try:
-            # Carregar dados do cache
-            print(f"📂 Carregando dados do cache '{self.arquivo_cache}'...")
             with open(self.arquivo_cache, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
-
-            # Verificar estrutura do cache
-            if 'dados' not in cache_data:
-                print("❌ Estrutura de cache inválida. Campo 'dados' não encontrado.")
-                return []
-
-            dados_formularios = cache_data['dados']
-            timestamp_cache = cache_data.get('timestamp', 'Desconhecido')
-            total_formularios = cache_data.get('total_formularios', len(dados_formularios))
-
-            print(f"✅ Cache carregado com sucesso!")
-            print(f"   📅 Criado em: {timestamp_cache}")
-            print(f"   📊 Total de formulários: {total_formularios}")
-
-            # Filtrar formulários
+            
+            dados_formularios = cache_data.get('dados', [])
+            clausulas_set = {str(c).strip() for c in clausulas_desejadas}
             formularios_filtrados = []
-            clausulas_encontradas = set()
-
-            print(f"🔍 Buscando por cláusulas: {clausulas_desejadas}")
-            for valor in clausulas_desejadas:
-                valor = str(valor).strip()
-                print(f"Valor: {valor}")
-
-            formularios_filtrados = []
-            clausulas_encontradas = set()
-
-            # antes de tudo, garanta que sua lista de buscas seja de strings limpinhas:
-            clausulas_desejadas = [str(c).strip() for c in clausulas_desejadas]
-
-            for formulario in cache_data.get('dados', []):
+            
+            for formulario in dados_formularios:
+                if not clausulas_set: break
                 for secao in formulario.get('sections', []):
                     if secao.get('title') == 'Identificação':
                         for questao in secao.get('questions', []):
                             if questao.get('title') == 'item/Cláusula':
-                                for sub in questao.get('sub_questions', []):
-                                    # converte o value (float, int ou str) para string
-                                    valor = str(sub.get('value', '')).strip()
-                                    if valor in clausulas_desejadas:
-                                        formularios_filtrados.append(formulario)
-                                        clausulas_encontradas.add(valor)
-                                        break
-                                break
+                                valor = str(questao.get('sub_questions', [{}])[0].get('value', '')).strip()
+                                if valor in clausulas_set:
+                                    formularios_filtrados.append(formulario)
+                                    clausulas_set.remove(valor)
+                                    break
                         break
-
-            # Mostrar resultado da busca
-            print(f"\n📊 Resultado da busca:")
-            for clausula in clausulas_desejadas:
-                if clausula in clausulas_encontradas:
-                    print(f"✅ Encontrada cláusula: {clausula}")
-                else:
-                    print(f"❌ Cláusula não encontrada: {clausula}")
-
-            print(f"📋 Total de formulários encontrados: {len(formularios_filtrados)}")
-
+            
+            print(f"📋 Itens encontrados no cache: {len(formularios_filtrados)}")
             return formularios_filtrados
-
-        except json.JSONDecodeError as e:
-            print(f"❌ Erro ao ler arquivo de cache: {e}")
-            return []
+            
         except Exception as e:
-            print(f"❌ Erro inesperado ao buscar no cache: {e}")
+            print(f"❌ Erro ao buscar no cache: {e}")
             return []
 
-    def extrair_informacoes_formulario(self, formulario):
-        """
-        Extrai as principais informações de um formulário
-        """
-        info = {
-            'id': formulario.get('id'),
-            'template_name': formulario.get('template', {}).get('name'),
-            'created_at': formulario.get('created_at'),
-            'assignee': f"{formulario.get('assignee', {}).get('first_name', '')} {formulario.get('assignee', {}).get('last_name', '')}".strip()
-        }
+    def _limpar_titulo(self, titulo_bruto: str) -> str:
+        """Normaliza o título para ser usado como chave de dicionário."""
+        if not titulo_bruto: return ""
+        nfkd_form = unicodedata.normalize('NFKD', titulo_bruto.lower())
+        texto_sem_acentos = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+        return texto_sem_acentos.replace('/', '_').replace(' ', '_')
 
+    def extrair_informacoes_formulario(self, formulario: dict) -> dict:
+        """Extrai os campos da seção Identificação usando títulos normalizados."""
+        info = {}
         for secao in formulario.get('sections', []):
             if secao.get('title') == 'Identificação':
                 for questao in secao.get('questions', []):
-                    titulo = questao.get('title')
-                    valor = questao.get('sub_questions', [{}])[0].get('value') if questao.get('sub_questions') else None
-                    info[titulo.lower().replace('/', '_').replace(' ', '_')] = valor
-
+                    titulo_limpo = self._limpar_titulo(questao.get('title'))
+                    if titulo_limpo:
+                        valor = questao.get('sub_questions', [{}])[0].get('value') if questao.get('sub_questions') else None
+                        if titulo_limpo == 'item_clausula':
+                           titulo_limpo = 'item'
+                        info[titulo_limpo] = valor
         return info
 
-    def limpar_cache(self):
-        """
-        Remove o arquivo de cache
-        """
-        if os.path.exists(self.arquivo_cache):
-            os.remove(self.arquivo_cache)
-            print(f"🗑️ Cache '{self.arquivo_cache}' removido.")
-        else:
-            print(f"ℹ️ Cache '{self.arquivo_cache}' não existe.")
-
 def _buscar_clausulas(exec_id: str) -> List[str]:
-    from requests import get, exceptions
     try:
         cc = POST.ChecklistCreator()
         url = f"{cc.base_url.rstrip('/')}/checklists"
-        resp = get(url, headers=cc.headers, params={
-            "template_id": "67f6ad27bfce31f9c1926b57",
+        resp = requests.get(url, headers=cc.headers, params={
+            "template_id": "67f6ad27bfce31f9c1926b57", # Template de Cadastro de Itens
             "execution_company_id": exec_id
         }, timeout=30)
         resp.raise_for_status()
@@ -238,58 +116,13 @@ def _buscar_clausulas(exec_id: str) -> List[str]:
         for chk in data:
             for sec in chk.get("sections", []):
                 for q in sec.get("questions", []):
-                    if "item/" in q.get("title", "").lower():
-                        if q.get("value"):
-                            claus.append(str(q["value"]).strip())
+                    if q.get("title", "").lower() == "item/cláusula":
                         for sub in q.get("sub_questions", []):
                             if sub.get("value"):
                                 claus.append(str(sub["value"]).strip())
-        print(f"[FetchClauses] Capturadas {len(claus)} cláusulas: {claus}")
-        return claus
-    except exceptions.RequestException as e:
+        claus_unicas = sorted(list(set(claus)))
+        print(f"[FetchClauses] Capturadas {len(claus_unicas)} cláusulas de cadastro únicas.")
+        return claus_unicas
+    except requests.exceptions.RequestException as e:
         print(f"[FetchClauses] ❌ {e}")
         return []
-
-def carregar_formularios(forcar_nova_requisicao=False):
-    buscador = FormulariosBuscador()
-    return buscador.carregar_e_salvar_formularios(forcar_nova_requisicao)
-
-
-def buscar_clausulas(clausulas_desejadas, mostrar_detalhes=True):
-    buscador = FormulariosBuscador()
-    formularios = buscador.buscar_por_clausulas_no_cache(clausulas_desejadas)
-
-    if mostrar_detalhes and formularios:
-        print(f"\n📋 DETALHES DOS FORMULÁRIOS ENCONTRADOS:")
-        print("-" * 60)
-
-        for i, formulario in enumerate(formularios, 1):
-            info = buscador.extrair_informacoes_formulario(formulario)
-            print(f"\n📄 Formulário {i}:")
-            print(f"   ID: {info['id']}")
-            print(f"   Código: {info.get('código', 'N/A')}")
-            print(f"   Item/Cláusula: {info.get('item_cláusula', 'N/A')}")
-            print(f"   Indicador: {info.get('indicador', 'N/A')}")
-            print(f"   Dimensão: {info.get('dimensão', 'N/A')}")
-            print(f"   Verificação: {info.get('verificação', 'N/A')}")
-            print(f"   Responsável: {info['assignee']}")
-            print(f"   Criado em: {info['created_at']}")
-
-    return formularios
-
-
-def procurarCadastroPorItem(item_desejado=None):
-    if item_desejado is None or item_desejado == []:
-        print("❌ Cláusulas desejadas não foram fornecidas.")
-        return []
-
-    if not isinstance(item_desejado, list):
-        print("❌ Erro: As cláusulas desejadas devem ser fornecidas como uma lista.")
-        return []
-
-    return buscar_clausulas(item_desejado)
-
-
-if __name__ == "__main__":
-    print("⚠️  Este arquivo contém apenas funções.")
-    print("💡 Execute o main.py para usar o sistema completo.")
