@@ -126,3 +126,18 @@ def _buscar_clausulas(exec_id: str) -> List[str]:
     except requests.exceptions.RequestException as e:
         print(f"[FetchClauses] ❌ {e}")
         return []
+
+if __name__ == "__main__":
+    exec_id = "6800f0468065037501c538d2"  # Substitua pelo ID real
+    buscador = FormulariosBuscador(execution_company_id=exec_id)
+    if buscador.carregar_e_salvar_formularios():
+        clausulas = _buscar_clausulas(exec_id)
+        if clausulas:
+            formularios = buscador.buscar_por_clausulas_no_cache(clausulas)
+            for f in formularios:
+                info = buscador.extrair_informacoes_formulario(f)
+                print(f"Formulário ID: {f.get('_id', {}).get('$oid')}, Informações: {info}")
+        else:
+            print("Nenhuma cláusula encontrada.")
+    else:
+        print("Falha ao carregar/salvar formulários.")
