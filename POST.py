@@ -10,7 +10,7 @@ import math
 class ChecklistCreator:
     def __init__(self):
         self.base_url = "https://app.way-v.com/api/integration"
-        self.token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjb21wYW55X2lkIjoiNjYzZDMxYTFlOWRhYzNmNWY0ZDNjZjJlIiwiY3VycmVudF90aW1lIjoxNzQ4OTUzODcyNjgzLCJleHAiOjIwNjQ0ODY2NzJ9.j6zOrJMDKNcCcMMcO99SudriP7KqEDLMJDE2FBlQ6ok'
+        self.token = MEU_TOKEN
         self.headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
 
         self.template_id_fiscalizacao = "67f6bfe0aa27d85466bdbb87"
