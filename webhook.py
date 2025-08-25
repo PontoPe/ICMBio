@@ -1,6 +1,7 @@
 import json
 import hashlib
 from typing import List, Dict
+from datetime import datetime
 
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -186,7 +187,8 @@ def criar_app_fastapi():
         salvar_cache_de_ids(cached_ids[-MAX_CACHE_SIZE:])
         
         background_tasks.add_task(handle_webhook_logic, body)
-        
+
+        print(datetime.now())
         print(f"✅ Webhook (ID: {current_id[:8]}) aceito. Agendado para processamento.")
         return JSONResponse(status_code=202, content={"status": "aceito", "detail": "Webhook recebido."})
         
