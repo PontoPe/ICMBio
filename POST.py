@@ -3,6 +3,7 @@ import requests
 import json
 from typing import Dict, List, Any
 import math
+import GET
 
 
 # A linha "from concurrent.futures import ThreadPoolExecutor, as_completed" deve ser removida
@@ -63,7 +64,7 @@ class ChecklistCreator:
             print(f"❌ ERRO DE CONEXÃO no lote {batch_num}: {e}")
             return False
 
-    # --- MÉTODO MODIFICADO ---
+    # --- MÉTDO MODIFICADO ---
     def popular_formulario_planejamento(self, form_id: str, clausulas: List[str]):
         if not clausulas:
             print("ℹ️ Nenhuma cláusula de cadastro encontrada para popular.")
@@ -71,25 +72,175 @@ class ChecklistCreator:
 
         print(f"📋 Preparando para popular o formulário ID: {form_id} com {len(clausulas)} cláusulas...")
 
-        sub_checklists_para_adicionar = [
-            {"id": self.question_id_subform_itens,
-             "sub_checklist_questions": [{"question_id": self.sub_question_id_item_col, "value": str(clausula)}]}
-            for clausula in clausulas
-        ]
+        buscador = GET.FormulariosBuscador(execution_company_id=exec_id)
+        buscador.carregar_e_salvar_formularios()
 
-        if not sub_checklists_para_adicionar:
+        # Nova etapa: separar cláusulas por instrumento
+        print("🔍 Separando cláusulas por instrumento...")
+
+        # Inicializar as listas por instrumento
+        itens_contrato = []
+        itens_caderno_encargos = []
+        itens_projeto_basico = []
+        itens_evef = []
+        itens_edital = []
+        itens_aditivo = []
+
+        # Carregar dados do cache para análise
+        if not os.path.exists(buscador.arquivo_cache):
+            print("❌ Arquivo de cache não encontrado para separação por instrumento.")
+            return
+
+        try:
+            with open(buscador.arquivo_cache, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            dados_formularios = cache_data.get('dados', [])
+
+            # Mapear instrumento para lista correspondente
+            instrumento_para_lista = {
+                "Contrato": itens_contrato,
+                "Caderno de encargos": itens_caderno_encargos,
+                "Projeto Básico": itens_projeto_basico,
+                "EVEF": itens_evef,
+                "Edital": itens_edital,
+                "Aditivo": itens_aditivo
+            }
+
+            # Percorrer todos os formulários para encontrar as cláusulas e seus instrumentos
+            clausulas_set = {str(c).strip() for c in clausulas}
+            clausulas_processadas = set()
+
+            for formulario in dados_formularios:
+                for secao in formulario.get('sections', []):
+                    if secao.get('title') == 'Identificação':
+                        item_clausula = None
+                        instrumento = None
+
+                        # Extrair item/cláusula e instrumento
+                        for questao in secao.get('questions', []):
+                            if questao.get('title') == 'item/Cláusula':
+                                item_clausula = str(questao.get('sub_questions', [{}])[0].get('value', '')).strip()
+                            elif questao.get('title') == 'Instrumento':
+                                instrumento = str(questao.get('sub_questions', [{}])[0].get('value', '')).strip()
+
+                        # Se encontrou tanto o item quanto o instrumento, e o item está na lista de cláusulas
+                        if item_clausula and instrumento and item_clausula in clausulas_set:
+                            if instrumento in instrumento_para_lista:
+                                instrumento_para_lista[instrumento].append(item_clausula)
+                                clausulas_processadas.add(item_clausula)
+                                print(f"  ✓ Item {item_clausula} → {instrumento}")
+                            else:
+                                print(f"  ⚠️ Instrumento desconhecido para item {item_clausula}: '{instrumento}'")
+
+                        break  # Sair do loop de seções após processar 'Identificação'
+
+            # Relatório da separação
+            print(f"\n📊 Relatório da separação por instrumento:")
+            print(f"  • Contrato: {len(itens_contrato)} itens")
+            print(f"  • Caderno de encargos: {len(itens_caderno_encargos)} itens")
+            print(f"  • Projeto Básico: {len(itens_projeto_basico)} itens")
+            print(f"  • EVEF: {len(itens_evef)} itens")
+            print(f"  • Edital: {len(itens_edital)} itens")
+            print(f"  • Aditivo: {len(itens_aditivo)} itens")
+            print(f"  • Total processado: {len(clausulas_processadas)}/{len(clausulas)}")
+
+            # Verificar se há cláusulas não processadas
+            clausulas_nao_processadas = clausulas_set - clausulas_processadas
+            if clausulas_nao_processadas:
+                print(f"  ⚠️ Cláusulas não encontradas no cache: {sorted(list(clausulas_nao_processadas))}")
+
+        except Exception as e:
+            print(f"❌ Erro ao separar cláusulas por instrumento: {e}")
+            return
+
+        # Configuração dos subformulários por instrumento
+        subformularios_config = {
+            "Contrato": {
+                "sub_entry_id": "68c18ba1e2713b0d7aad707f",
+                "item_question_id": "689639faaf3d80cb1aeb30e5",
+                "execucao_question_id": "a28d963646724bfc8f261797483bebf4",
+                "default_execucao": "Fiscalização Técnica - FT",
+                "itens": itens_contrato
+            },
+            "Caderno de encargos": {
+                "sub_entry_id": "68c18ba1e2713b0d7aad7080",
+                "item_question_id": "68963d5e65bd3707b0e10824",
+                "execucao_question_id": "9272d555c1564ae7b810ba2223f7996e",
+                "default_execucao": "Fiscalização Administrativa - FA",
+                "itens": itens_caderno_encargos
+            },
+            "Projeto Básico": {
+                "sub_entry_id": "68c18ba1e2713b0d7aad7081",
+                "item_question_id": "689641be1b29d3b972fbba97",
+                "execucao_question_id": "08928cfa1fef4c95bd7726632547a2a5",
+                "default_execucao": "Fiscalização de Obras (COPEA) - FO",
+                "itens": itens_projeto_basico
+            },
+            "EVEF": {
+                "sub_entry_id": "68c18ba1e2713b0d7aad7083",
+                "item_question_id": "689648186d5df9d26cdaee10",
+                "execucao_question_id": "ab5f9ba79c544153a639b7ea5f1c6f64",
+                "default_execucao": "Gestão do Contrato - GC",
+                "itens": itens_evef
+            },
+            "Edital": {
+                "sub_entry_id": "68c18ba1e2713b0d7aad7084",
+                "item_question_id": "689649471d38401fdefa5ca6",
+                "execucao_question_id": "343d0ae270a44cf09cf7401f4ea1dbcb",
+                "default_execucao": "Verificador de Conformidade - VC",
+                "itens": itens_edital
+            },
+            "Aditivo": {
+                "sub_entry_id": "68c18ba1e2713b0d7aad7085",
+                "item_question_id": "689649f51b29d3b972fbca6f",
+                "execucao_question_id": "404733197bf446b6b45b7ff37b94c23e",
+                "default_execucao": "Fiscalização Técnica - FT, Fiscalização Administrativa - FA, Fiscalização de Obras (COPEA) - FO, Gestão do Contrato - GC, Verificador de Conformidade - VC",
+                "itens": itens_aditivo
+            }
+        }
+
+        # Preparar todos os sub_checklists para envio
+        todos_sub_checklists = []
+
+        for instrumento, config in subformularios_config.items():
+            itens_do_instrumento = config["itens"]
+
+            if not itens_do_instrumento:
+                print(f"📝 Nenhum item encontrado para {instrumento}, pulando...")
+                continue
+
+            print(f"📝 Preparando {len(itens_do_instrumento)} itens para subformulário: {instrumento}")
+
+            for item in itens_do_instrumento:
+                sub_checklist = {
+                    "id": config["sub_entry_id"],
+                    "sub_checklist_questions": [
+                        {
+                            "question_id": config["item_question_id"],
+                            "value": str(item)
+                        },
+                        {
+                            "question_id": config["execucao_question_id"],
+                            "value": config["default_execucao"]
+                        }
+                    ]
+                }
+                todos_sub_checklists.append(sub_checklist)
+
+        if not todos_sub_checklists:
             print("⚠️ Nenhum subchecklist foi preparado.")
             return
 
+        # Envio em lotes
         batch_size = 150
         payloads = [
-            {"checklist_id": form_id, "sub_checklists": sub_checklists_para_adicionar[i:i + batch_size]}
-            for i in range(0, len(sub_checklists_para_adicionar), batch_size)
+            {"checklist_id": form_id, "sub_checklists": todos_sub_checklists[i:i + batch_size]}
+            for i in range(0, len(todos_sub_checklists), batch_size)
         ]
 
         total_lotes = len(payloads)
-        print(
-            f"📦 Total de {len(sub_checklists_para_adicionar)} itens a serem enviados em {total_lotes} lotes sequenciais.")
+        print(f"📦 Total de {len(todos_sub_checklists)} itens a serem enviados em {total_lotes} lotes sequenciais.")
 
         success_count = 0
         for i, payload in enumerate(payloads):

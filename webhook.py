@@ -108,9 +108,6 @@ def handle_webhook_logic(payload: dict):
         print("\n▶️ CENÁRIO 2: Gerando checklist de fiscalização final...")
         if not exec_id: return print("Falha no Cenário 2: ID da empresa não encontrado.")
         
-        buscador = GET.FormulariosBuscador(execution_company_id=exec_id)
-        buscador.carregar_e_salvar_formularios()
-        
         itens_para_api = {}
         for tipo_key in ['itens_ft', 'itens_fa', 'itens_fo', 'itens_gc', 'itens_vc']:
             tipo_abbr = tipo_key.replace('itens_', '').upper()
