@@ -4,6 +4,7 @@ import json
 from typing import Dict, List, Any
 import math
 import GET
+import os
 
 
 # A linha "from concurrent.futures import ThreadPoolExecutor, as_completed" deve ser removida
@@ -65,15 +66,13 @@ class ChecklistCreator:
             return False
 
     # --- MÉTDO MODIFICADO ---
+        # --- MÉTDO MODIFICADO ---
     def popular_formulario_planejamento(self, form_id: str, clausulas: List[str]):
         if not clausulas:
             print("ℹ️ Nenhuma cláusula de cadastro encontrada para popular.")
             return
 
         print(f"📋 Preparando para popular o formulário ID: {form_id} com {len(clausulas)} cláusulas...")
-
-        buscador = GET.FormulariosBuscador(execution_company_id=exec_id)
-        buscador.carregar_e_salvar_formularios()
 
         # Nova etapa: separar cláusulas por instrumento
         print("🔍 Separando cláusulas por instrumento...")
@@ -87,12 +86,12 @@ class ChecklistCreator:
         itens_aditivo = []
 
         # Carregar dados do cache para análise
-        if not os.path.exists(buscador.arquivo_cache):
-            print("❌ Arquivo de cache não encontrado para separação por instrumento.")
+        if not os.path.exists('cache_formularios.json'):
+            print("❌ Arquivo de cache 'cache_formularios.json' não encontrado para separação por instrumento.")
             return
 
         try:
-            with open(buscador.arquivo_cache, 'r', encoding='utf-8') as f:
+            with open('cache_formularios.json', 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
 
             dados_formularios = cache_data.get('dados', [])
@@ -154,48 +153,36 @@ class ChecklistCreator:
             print(f"❌ Erro ao separar cláusulas por instrumento: {e}")
             return
 
-        # Configuração dos subformulários por instrumento
+        # ✅ **CORREÇÃO 1**: Simplificado o dicionário para remover as chaves não utilizadas
         subformularios_config = {
             "Contrato": {
-                "sub_entry_id": "68c18ba1e2713b0d7aad707f",
+                "sub_entry_id": "e59b5582f2a2421eb475a0ab1c4d26b3",
                 "item_question_id": "689639faaf3d80cb1aeb30e5",
-                "execucao_question_id": "a28d963646724bfc8f261797483bebf4",
-                "default_execucao": "Fiscalização Técnica - FT",
                 "itens": itens_contrato
             },
             "Caderno de encargos": {
-                "sub_entry_id": "68c18ba1e2713b0d7aad7080",
+                "sub_entry_id": "2affd4a2ab4f483ba50e496270d8e06c",
                 "item_question_id": "68963d5e65bd3707b0e10824",
-                "execucao_question_id": "9272d555c1564ae7b810ba2223f7996e",
-                "default_execucao": "Fiscalização Administrativa - FA",
                 "itens": itens_caderno_encargos
             },
             "Projeto Básico": {
-                "sub_entry_id": "68c18ba1e2713b0d7aad7081",
+                "sub_entry_id": "aba4c44acf9842739a0fff4f0bd9a744",
                 "item_question_id": "689641be1b29d3b972fbba97",
-                "execucao_question_id": "08928cfa1fef4c95bd7726632547a2a5",
-                "default_execucao": "Fiscalização de Obras (COPEA) - FO",
                 "itens": itens_projeto_basico
             },
             "EVEF": {
-                "sub_entry_id": "68c18ba1e2713b0d7aad7083",
+                "sub_entry_id": "9c8c2b54fdcb428282692281029ac74a",
                 "item_question_id": "689648186d5df9d26cdaee10",
-                "execucao_question_id": "ab5f9ba79c544153a639b7ea5f1c6f64",
-                "default_execucao": "Gestão do Contrato - GC",
                 "itens": itens_evef
             },
             "Edital": {
-                "sub_entry_id": "68c18ba1e2713b0d7aad7084",
+                "sub_entry_id": "c7b33e1bb7d34b62b6d45b5895e5ad90",
                 "item_question_id": "689649471d38401fdefa5ca6",
-                "execucao_question_id": "343d0ae270a44cf09cf7401f4ea1dbcb",
-                "default_execucao": "Verificador de Conformidade - VC",
                 "itens": itens_edital
             },
             "Aditivo": {
-                "sub_entry_id": "68c18ba1e2713b0d7aad7085",
+                "sub_entry_id": "94aca9b0582b466d9cdb972798f4aa8c",
                 "item_question_id": "689649f51b29d3b972fbca6f",
-                "execucao_question_id": "404733197bf446b6b45b7ff37b94c23e",
-                "default_execucao": "Fiscalização Técnica - FT, Fiscalização Administrativa - FA, Fiscalização de Obras (COPEA) - FO, Gestão do Contrato - GC, Verificador de Conformidade - VC",
                 "itens": itens_aditivo
             }
         }
@@ -213,16 +200,13 @@ class ChecklistCreator:
             print(f"📝 Preparando {len(itens_do_instrumento)} itens para subformulário: {instrumento}")
 
             for item in itens_do_instrumento:
+                # ✅ **CORREÇÃO 2**: Simplificado o payload para enviar apenas o campo "item"
                 sub_checklist = {
                     "id": config["sub_entry_id"],
                     "sub_checklist_questions": [
                         {
                             "question_id": config["item_question_id"],
                             "value": str(item)
-                        },
-                        {
-                            "question_id": config["execucao_question_id"],
-                            "value": config["default_execucao"]
                         }
                     ]
                 }

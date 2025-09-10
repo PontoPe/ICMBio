@@ -9,7 +9,7 @@ import unicodedata
 class FormulariosBuscador:
     def __init__(self, execution_company_id: str, arquivo_cache='cache_formularios.json'):
         self.url = "https://app.way-v.com/api/integration/checklists"
-        self.token = MEU_TOKEN
+        self.token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjb21wYW55X2lkIjoiNjYzZDMxYTFlOWRhYzNmNWY0ZDNjZjJlIiwiY3VycmVudF90aW1lIjoxNzQ4OTUzODcyNjgzLCJleHAiOjIwNjQ0ODY2NzJ9.j6zOrJMDKNcCcMMcO99SudriP7KqEDLMJDE2FBlQ6ok"
         self.params = {
             "execution_company_id": execution_company_id,
             "template_id": '67f6ae4d6ba4f07ba32a1ea8'

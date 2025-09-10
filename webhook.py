@@ -96,10 +96,13 @@ def handle_webhook_logic(payload: dict):
     print(f"Flag 'Gerar Itens': {info['gerar_itens_auto']} | Flag 'Gerar Checklist': {info['gerar_checklist_manual']} | Itens Habilitados: {total_itens_habilitados}")
 
     if info['gerar_itens_auto'] and total_itens_habilitados == 0:
-        print("\n▶️ CENÁRIO 1: Populando subformulário 'Seleção de Itens'...")
+        print("\n▶️ CENÁRIO 1: Populando subformulário 'Seleção de Itens'... exec_id:", exec_id, "form_id:", form_id)
         if not exec_id or not form_id: return print(f"Falha no Cenário 1: IDs não encontrados (Form: {form_id}, Empresa: {exec_id}).")
         clausulas = GET._buscar_clausulas(exec_id)
         if not clausulas: return print("Falha no Cenário 1: Nenhuma cláusula de cadastro encontrada.")
+
+        buscador = GET.FormulariosBuscador(execution_company_id=exec_id)
+        buscador.carregar_e_salvar_formularios()
         creator = ChecklistCreator()
         creator.popular_formulario_planejamento(form_id, clausulas)
         print("✅ Processamento em background do Cenário 1 concluído.")
