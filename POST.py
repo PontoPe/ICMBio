@@ -72,7 +72,17 @@ class ChecklistCreator:
             print("ℹ️ Nenhuma cláusula de cadastro encontrada para popular.")
             return
 
-        print(f"📋 Preparando para popular o formulário ID: {form_id} com {len(clausulas)} cláusulas...")
+        # DEDUPLICAÇÃO: Remover cláusulas duplicadas mantendo a ordem
+        clausulas_unicas = []
+        clausulas_vistas = set()
+        for clausula in clausulas:
+            clausula_limpa = str(clausula).strip()
+            if clausula_limpa not in clausulas_vistas:
+                clausulas_unicas.append(clausula_limpa)
+                clausulas_vistas.add(clausula_limpa)
+
+        clausulas = clausulas_unicas
+        print(f"📋 Preparando para popular o formulário ID: {form_id} com {len(clausulas)} cláusulas únicas...")
 
         # Nova etapa: separar cláusulas por instrumento
         print("🔍 Separando cláusulas por instrumento...")
@@ -110,6 +120,9 @@ class ChecklistCreator:
             clausulas_set = {str(c).strip() for c in clausulas}
             clausulas_processadas = set()
 
+            # Manter um mapa de cláusula -> instrumento para evitar duplicatas por instrumento
+            clausula_instrumento_map = {}
+
             for formulario in dados_formularios:
                 for secao in formulario.get('sections', []):
                     if secao.get('title') == 'Identificação':
@@ -125,23 +138,31 @@ class ChecklistCreator:
 
                         # Se encontrou tanto o item quanto o instrumento, e o item está na lista de cláusulas
                         if item_clausula and instrumento and item_clausula in clausulas_set:
-                            if instrumento in instrumento_para_lista:
-                                instrumento_para_lista[instrumento].append(item_clausula)
-                                clausulas_processadas.add(item_clausula)
-                                print(f"  ✓ Item {item_clausula} → {instrumento}")
+                            # Verificar se esta cláusula já foi adicionada para este instrumento
+                            chave_unica = f"{item_clausula}_{instrumento}"
+
+                            if chave_unica not in clausula_instrumento_map:
+                                clausula_instrumento_map[chave_unica] = True
+
+                                if instrumento in instrumento_para_lista:
+                                    instrumento_para_lista[instrumento].append(item_clausula)
+                                    clausulas_processadas.add(item_clausula)
+                                    print(f"  ✓ Item {item_clausula} → {instrumento}")
+                                else:
+                                    print(f"  ⚠️ Instrumento desconhecido para item {item_clausula}: '{instrumento}'")
                             else:
-                                print(f"  ⚠️ Instrumento desconhecido para item {item_clausula}: '{instrumento}'")
+                                print(f"  ⏭️ Item {item_clausula} já adicionado para {instrumento}, pulando duplicata")
 
                         break  # Sair do loop de seções após processar 'Identificação'
 
             # Relatório da separação
             print(f"\n📊 Relatório da separação por instrumento:")
-            print(f"  • Contrato: {len(itens_contrato)} itens")
-            print(f"  • Caderno de encargos: {len(itens_caderno_encargos)} itens")
-            print(f"  • Projeto Básico: {len(itens_projeto_basico)} itens")
-            print(f"  • EVEF: {len(itens_evef)} itens")
-            print(f"  • Edital: {len(itens_edital)} itens")
-            print(f"  • Aditivo: {len(itens_aditivo)} itens")
+            print(f"  • Contrato: {len(itens_contrato)} itens únicos")
+            print(f"  • Caderno de encargos: {len(itens_caderno_encargos)} itens únicos")
+            print(f"  • Projeto Básico: {len(itens_projeto_basico)} itens únicos")
+            print(f"  • EVEF: {len(itens_evef)} itens únicos")
+            print(f"  • Edital: {len(itens_edital)} itens únicos")
+            print(f"  • Aditivo: {len(itens_aditivo)} itens únicos")
             print(f"  • Total processado: {len(clausulas_processadas)}/{len(clausulas)}")
 
             # Verificar se há cláusulas não processadas
@@ -153,7 +174,7 @@ class ChecklistCreator:
             print(f"❌ Erro ao separar cláusulas por instrumento: {e}")
             return
 
-        # ✅ **CORREÇÃO 1**: Simplificado o dicionário para remover as chaves não utilizadas
+        # Configuração dos subformulários
         subformularios_config = {
             "Contrato": {
                 "sub_entry_id": "e59b5582f2a2421eb475a0ab1c4d26b3",
@@ -190,17 +211,27 @@ class ChecklistCreator:
         # Preparar todos os sub_checklists para envio
         todos_sub_checklists = []
 
+        # Conjunto para rastrear itens já adicionados globalmente (última verificação de segurança)
+        itens_ja_adicionados = set()
+
         for instrumento, config in subformularios_config.items():
             itens_do_instrumento = config["itens"]
 
             if not itens_do_instrumento:
-                print(f"📝 Nenhum item encontrado para {instrumento}, pulando...")
+                print(f"🔍 Nenhum item encontrado para {instrumento}, pulando...")
                 continue
 
             print(f"📝 Preparando {len(itens_do_instrumento)} itens para subformulário: {instrumento}")
 
             for item in itens_do_instrumento:
-                # ✅ **CORREÇÃO 2**: Simplificado o payload para enviar apenas o campo "item"
+                # Verificação final de duplicatas
+                chave_global = f"{config['sub_entry_id']}_{item}"
+                if chave_global in itens_ja_adicionados:
+                    print(f"  ⏭️ Item {item} já foi adicionado globalmente, pulando...")
+                    continue
+
+                itens_ja_adicionados.add(chave_global)
+
                 sub_checklist = {
                     "id": config["sub_entry_id"],
                     "sub_checklist_questions": [
@@ -224,7 +255,8 @@ class ChecklistCreator:
         ]
 
         total_lotes = len(payloads)
-        print(f"📦 Total de {len(todos_sub_checklists)} itens a serem enviados em {total_lotes} lotes sequenciais.")
+        print(
+            f"📦 Total de {len(todos_sub_checklists)} itens únicos a serem enviados em {total_lotes} lotes sequenciais.")
 
         success_count = 0
         for i, payload in enumerate(payloads):
