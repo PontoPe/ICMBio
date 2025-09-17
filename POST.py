@@ -5,7 +5,12 @@ from typing import Dict, List, Any
 import math
 import GET
 import os
+from datetime import datetime
 
+
+def get_timestamp():
+    """Retorna timestamp formatado com data e hora."""
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
 
 # A linha "from concurrent.futures import ThreadPoolExecutor, as_completed" deve ser removida
 
@@ -87,6 +92,9 @@ class ChecklistCreator:
         # Nova etapa: separar cláusulas por instrumento
         print("🔍 Separando cláusulas por instrumento...")
 
+        # TEMPORÁRIO: Forçar todos os itens para o Contrato
+        FORCAR_TUDO_PARA_CONTRATO = True  # Mude para False para reverter ao comportamento normal
+
         # Inicializar as listas por instrumento
         itens_contrato = []
         itens_caderno_encargos = []
@@ -106,6 +114,19 @@ class ChecklistCreator:
 
             dados_formularios = cache_data.get('dados', [])
 
+            print(f"[DEBUG] Total de formulários no cache: {len(dados_formularios)}")
+
+            if dados_formularios:
+                print(f"\n[DEBUG] ESTRUTURA DO PRIMEIRO FORMULÁRIO:")
+                primeiro_form = dados_formularios[0]
+                for secao in primeiro_form.get('sections', []):
+                    print(f"  SEÇÃO: '{secao.get('title')}'")
+                    for questao in secao.get('questions', []):
+                        print(f"    CAMPO: '{questao.get('title')}'")
+                        if questao.get('sub_questions'):
+                            for sub_q in questao.get('sub_questions', []):
+                                print(f"      VALOR: '{sub_q.get('value')}'")
+
             # Mapear instrumento para lista correspondente
             instrumento_para_lista = {
                 "Contrato": itens_contrato,
@@ -120,49 +141,103 @@ class ChecklistCreator:
             clausulas_set = {str(c).strip() for c in clausulas}
             clausulas_processadas = set()
 
+            print(f"\n[DEBUG] Procurando por estas cláusulas: {clausulas_set}")
+            print(f"[DEBUG] ================== PROCESSAMENTO ==================")
+
             # Manter um mapa de cláusula -> instrumento para evitar duplicatas por instrumento
             clausula_instrumento_map = {}
 
-            for formulario in dados_formularios:
+            for idx, formulario in enumerate(dados_formularios):
+                print(f"\n[DEBUG] >>> FORMULÁRIO {idx + 1} de {len(dados_formularios)}")
+
+                # Procurar em TODAS as seções
+                item_clausula = None
+                instrumento = None
+                secao_item = None
+                secao_instrumento = None
+
                 for secao in formulario.get('sections', []):
-                    if secao.get('title') == 'Identificação':
-                        item_clausula = None
-                        instrumento = None
+                    secao_titulo = secao.get('title', '')
 
-                        # Extrair item/cláusula e instrumento
-                        for questao in secao.get('questions', []):
-                            if questao.get('title') == 'item/Cláusula':
-                                item_clausula = str(questao.get('sub_questions', [{}])[0].get('value', '')).strip()
-                            elif questao.get('title') == 'Instrumento':
-                                instrumento = str(questao.get('sub_questions', [{}])[0].get('value', '')).strip()
+                    for questao in secao.get('questions', []):
+                        titulo_questao = questao.get('title', '')
+                        titulo_questao_lower = titulo_questao.lower()
 
-                        # Se encontrou tanto o item quanto o instrumento, e o item está na lista de cláusulas
-                        if item_clausula and instrumento and item_clausula in clausulas_set:
-                            # Verificar se esta cláusula já foi adicionada para este instrumento
-                            chave_unica = f"{item_clausula}_{instrumento}"
+                        # Procurar por variações do campo item/cláusula
+                        if ('item' in titulo_questao_lower or
+                                'cláusula' in titulo_questao_lower or
+                                'clausula' in titulo_questao_lower):
+                            if questao.get('sub_questions'):
+                                valor = questao.get('sub_questions', [{}])[0].get('value', '')
+                                if valor:
+                                    item_clausula = str(valor).strip()
+                                    secao_item = secao_titulo
+                                    print(
+                                        f"    ✓ Item/Cláusula: '{item_clausula}' (seção: '{secao_titulo}', campo: '{titulo_questao}')")
 
-                            if chave_unica not in clausula_instrumento_map:
-                                clausula_instrumento_map[chave_unica] = True
+                        # Procurar pelo instrumento - aceitar variações do nome
+                        elif 'instrumento' in titulo_questao_lower:
+                            if questao.get('sub_questions'):
+                                valor = questao.get('sub_questions', [{}])[0].get('value', '')
+                                if valor:
+                                    instrumento = str(valor).strip()
+                                    secao_instrumento = secao_titulo
+                                    print(
+                                        f"    ✓ Instrumento: '{instrumento}' (seção: '{secao_titulo}', campo: '{titulo_questao}')")
 
-                                if instrumento in instrumento_para_lista:
-                                    instrumento_para_lista[instrumento].append(item_clausula)
-                                    clausulas_processadas.add(item_clausula)
-                                    print(f"  ✓ Item {item_clausula} → {instrumento}")
-                                else:
-                                    print(f"  ⚠️ Instrumento desconhecido para item {item_clausula}: '{instrumento}'")
-                            else:
-                                print(f"  ⏭️ Item {item_clausula} já adicionado para {instrumento}, pulando duplicata")
+                # Resumo do formulário
+                print(f"    RESUMO:")
+                print(f"      - Item: '{item_clausula}' {f'(de {secao_item})' if secao_item else ''}")
+                print(
+                    f"      - Instrumento: '{instrumento}' {f'(de {secao_instrumento})' if secao_instrumento else ''}")
+                print(f"      - Item está na lista? {item_clausula in clausulas_set}")
 
-                        break  # Sair do loop de seções após processar 'Identificação'
+                # Se não encontrou instrumento, usar "Contrato" como padrão
+                if item_clausula and not instrumento:
+                    instrumento = "Contrato"
+                    print(f"      → Sem instrumento, usando 'Contrato' como padrão")
+
+                # Se encontrou o item e ele está na lista de cláusulas
+                if item_clausula and item_clausula in clausulas_set:
+                    # TEMPORÁRIO: Forçar tudo para Contrato
+                    if FORCAR_TUDO_PARA_CONTRATO:
+                        instrumento_original = instrumento
+                        instrumento = "Contrato"
+                        print(f"      📌 FORÇANDO para Contrato (era: {instrumento_original})")
+
+                    # Verificar se esta cláusula já foi adicionada para este instrumento
+                    chave_unica = f"{item_clausula}_{instrumento}"
+
+                    if chave_unica not in clausula_instrumento_map:
+                        clausula_instrumento_map[chave_unica] = True
+
+                        if instrumento in instrumento_para_lista:
+                            instrumento_para_lista[instrumento].append(item_clausula)
+                            clausulas_processadas.add(item_clausula)
+                            print(f"      ✅ ADICIONADO ao {instrumento}!")
+                        else:
+                            print(f"      ❌ Instrumento '{instrumento}' não reconhecido")
+                            print(f"         Válidos: {list(instrumento_para_lista.keys())}")
+                    else:
+                        print(f"      ⏭️ Já adicionado, pulando duplicata")
+                elif item_clausula:
+                    print(f"      ❌ Item '{item_clausula}' NÃO está na lista de cláusulas")
+
+            print(f"\n[DEBUG] ================== FIM DO PROCESSAMENTO ==================")
 
             # Relatório da separação
-            print(f"\n📊 Relatório da separação por instrumento:")
-            print(f"  • Contrato: {len(itens_contrato)} itens únicos")
-            print(f"  • Caderno de encargos: {len(itens_caderno_encargos)} itens únicos")
-            print(f"  • Projeto Básico: {len(itens_projeto_basico)} itens únicos")
-            print(f"  • EVEF: {len(itens_evef)} itens únicos")
-            print(f"  • Edital: {len(itens_edital)} itens únicos")
-            print(f"  • Aditivo: {len(itens_aditivo)} itens únicos")
+            if FORCAR_TUDO_PARA_CONTRATO:
+                print(f"\n📊 [MODO TEMPORÁRIO] Todos os itens forçados para Contrato:")
+                print(f"  • Contrato: {len(itens_contrato)} itens (TODOS)")
+            else:
+                print(f"\n📊 Relatório da separação por instrumento:")
+                print(f"  • Contrato: {len(itens_contrato)} itens únicos")
+                print(f"  • Caderno de encargos: {len(itens_caderno_encargos)} itens únicos")
+                print(f"  • Projeto Básico: {len(itens_projeto_basico)} itens únicos")
+                print(f"  • EVEF: {len(itens_evef)} itens únicos")
+                print(f"  • Edital: {len(itens_edital)} itens únicos")
+                print(f"  • Aditivo: {len(itens_aditivo)} itens únicos")
+
             print(f"  • Total processado: {len(clausulas_processadas)}/{len(clausulas)}")
 
             # Verificar se há cláusulas não processadas
@@ -172,6 +247,9 @@ class ChecklistCreator:
 
         except Exception as e:
             print(f"❌ Erro ao separar cláusulas por instrumento: {e}")
+            print(get_timestamp())
+            import traceback
+            traceback.print_exc()
             return
 
         # Configuração dos subformulários
@@ -255,29 +333,43 @@ class ChecklistCreator:
         ]
 
         total_lotes = len(payloads)
+        print(get_timestamp())
         print(
             f"📦 Total de {len(todos_sub_checklists)} itens únicos a serem enviados em {total_lotes} lotes sequenciais.")
 
         success_count = 0
+        tempo_total_inicio = time.time()
+
         for i, payload in enumerate(payloads):
             batch_num = i + 1
             print(f"➡️ Enviando lote {batch_num}/{total_lotes}...")
+            inicio_lote = time.time()
 
             # Chama o envio para o lote atual e aguarda o resultado
             success = self._send_request(payload, batch_num)
 
             # Se o envio falhar, interrompe o processo
             if success:
+                fim_lote = time.time()
+                duracao_lote = fim_lote - inicio_lote
+                print(f"⏱️ Tempo do lote {batch_num}: {duracao_lote:.2f} segundos")
                 success_count += 1
             else:
                 print(f"🛑 Envio interrompido devido a erro no lote {batch_num}.")
+                print(get_timestamp())
                 break
+
+        tempo_total_fim = time.time()
+        duracao_total = tempo_total_fim - tempo_total_inicio
+        print(f"⏳ Tempo total de envio: {duracao_total:.2f} segundos")
 
         if success_count == total_lotes:
             print("🎉 Formulário populado com sucesso! Todos os lotes foram enviados.")
+            print(get_timestamp())
         else:
             print(
                 f"⚠️ Processo de população concluído com falhas. {success_count} de {total_lotes} lotes enviados com sucesso.")
+            print(get_timestamp())
 
     def criar_checklist_principal(self, identificacao: Dict[str, str], execution_company_id: str,
                                   assignee_id: str = None, creator_id: str = None):
@@ -302,18 +394,22 @@ class ChecklistCreator:
             checklist_data["checklist"]["questions"].append(
                 {"id": self.question_ids_fiscalizacao[tipo], "sub_questions": []})
 
+        print(get_timestamp())
         print(f"📝 Criando checklist principal para a empresa {execution_company_id} com status 'pending'...")
         response = requests.post(f"{self.base_url}/checklists", headers=self.headers, json=checklist_data)
         if response.status_code not in [200, 201]:
             print(f"❌ Erro ao criar checklist: {response.status_code}\n{response.text}")
+            print(get_timestamp())
             return None
         else:
             checklist_id = response.json()["_id"]["$oid"]
             print(f"✅ Checklist criado com id: {checklist_id}")
+            print(get_timestamp())
             return checklist_id
 
     def adicionar_subchecklists_fiscalizacao(self, checklist_id: str, tipo: str, itens: List[Dict[str, Any]]):
         if not itens: return
+        print(get_timestamp())
         print(f"📋 Adicionando {len(itens)} itens de fiscalização para a categoria {tipo}...")
         sub_checklists = []
         question_mapping = self.sub_question_mapping_fiscalizacao[tipo]
@@ -328,6 +424,7 @@ class ChecklistCreator:
         response = requests.post(f"{self.base_url}/subchecklists", headers=self.headers, json=payload, timeout=90)
         if response.status_code not in [200, 201]:
             print(f"❌ Erro ao adicionar itens para {tipo}: {response.status_code}\n{response.text}")
+            print(get_timestamp())
 
     def criar_checklist_completo(self, identificacao: Dict[str, str], execution_company_id: str,
                                  itens_por_tipo: Dict[str, List[Dict]] = None,

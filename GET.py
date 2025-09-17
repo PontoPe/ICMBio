@@ -92,14 +92,33 @@ class FormulariosBuscador:
         """Extrai os campos da seção Identificação usando títulos normalizados."""
         info = {}
         for secao in formulario.get('sections', []):
-            if secao.get('title') == 'Identificação':
-                for questao in secao.get('questions', []):
-                    titulo_limpo = self._limpar_titulo(questao.get('title'))
-                    if titulo_limpo:
-                        valor = questao.get('sub_questions', [{}])[0].get('value') if questao.get('sub_questions') else None
-                        if titulo_limpo == 'item_clausula':
-                           titulo_limpo = 'item'
-                        info[titulo_limpo] = valor
+            # Procurar em qualquer seção, não apenas 'Identificação'
+            for questao in secao.get('questions', []):
+                titulo = questao.get('title', '')
+                titulo_lower = titulo.lower()
+                titulo_limpo = self._limpar_titulo(titulo)
+
+                # Detectar campo de item/cláusula
+                if 'item' in titulo_lower or 'cláusula' in titulo_lower or 'clausula' in titulo_lower:
+                    if questao.get('sub_questions'):
+                        valor = questao.get('sub_questions', [{}])[0].get('value')
+                        if valor:
+                            info['item'] = valor
+
+                # Detectar campo de instrumento (aceita variações)
+                elif 'instrumento (antigo)' in titulo_lower:
+                    if questao.get('sub_questions'):
+                        valor = questao.get('sub_questions', [{}])[0].get('value')
+                        if valor:
+                            info['instrumento'] = valor
+
+                # Outros campos normais
+                elif titulo_limpo and questao.get('sub_questions'):
+                    valor = questao.get('sub_questions', [{}])[0].get('value')
+                    if titulo_limpo == 'item_clausula':
+                        titulo_limpo = 'item'
+                    info[titulo_limpo] = valor
+
         return info
 
 def _buscar_clausulas(exec_id: str) -> List[str]:
