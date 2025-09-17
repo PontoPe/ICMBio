@@ -93,7 +93,7 @@ class ChecklistCreator:
         print("🔍 Separando cláusulas por instrumento...")
 
         # TEMPORÁRIO: Forçar todos os itens para o Contrato
-        FORCAR_TUDO_PARA_CONTRATO = True  # Mude para False para reverter ao comportamento normal
+        FORCAR_TUDO_PARA_CONTRATO = False  # Mude para False para reverter ao comportamento normal
 
         # Inicializar as listas por instrumento
         itens_contrato = []
