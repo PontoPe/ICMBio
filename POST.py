@@ -210,7 +210,8 @@ class ChecklistCreator:
 
                     if chave_unica not in clausula_instrumento_map:
                         clausula_instrumento_map[chave_unica] = True
-
+                        if instrumento == '04':
+                            instrumento = 'Contrato'
                         if instrumento in instrumento_para_lista:
                             instrumento_para_lista[instrumento].append(item_clausula)
                             clausulas_processadas.add(item_clausula)
